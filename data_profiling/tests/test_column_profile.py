@@ -236,6 +236,36 @@ def test_profile_column_numpy_types():
     assert prof_bool.value is True
     assert prof_bool.sample_script() == "True"  # Should not error
 
+def test_profile_column_none_with_single_value():
+    """Test that None values mixed with single unique value creates OneValueProfile with the non-null value."""
+    # Test None + string (was causing "Invalid value type: NoneType" error)
+    df1 = pd.DataFrame({"x": [None, None, None, "hello"]})
+    prof1 = profile_column(df1, column="x")
+    assert isinstance(prof1, OneValueProfile)
+    assert prof1.value == "hello"  # Should be the non-null value, not None
+    assert prof1.missing_prob == 0.75
+    # Should generate valid script without error
+    script = prof1.sample_script()
+    assert "'hello'" in script
+    assert "random.random()" in script
+    assert "else None" in script
+    
+    # Test None + int
+    df2 = pd.DataFrame({"x": [None, 42, None, 42]})
+    prof2 = profile_column(df2, column="x")
+    assert isinstance(prof2, OneValueProfile)
+    assert prof2.value == 42.0  # Pandas converts to float when mixed with None
+    assert prof2.missing_prob == 0.5
+    script2 = prof2.sample_script()
+    assert "42.0" in script2
+    
+    # Test None first
+    df3 = pd.DataFrame({"x": [None, "test", "test", "test"]})
+    prof3 = profile_column(df3, column="x")
+    assert isinstance(prof3, OneValueProfile)
+    assert prof3.value == "test"  # Should be the non-null value
+    assert prof3.missing_prob == 0.25
+
 def test_profile_one_value_int():
     df = pd.DataFrame({"x": [1, 1, 1, None]})
     prof = profile_column(df, column="x")
