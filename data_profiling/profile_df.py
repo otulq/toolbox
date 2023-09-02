@@ -24,7 +24,16 @@ from pandas.api.types import (
 )
 
 
-
+def _convert_numpy_to_python(value: Any) -> Any:
+    """Convert numpy types to native Python types for OneValueProfile."""
+    if isinstance(value, np.integer):
+        return int(value)
+    elif isinstance(value, np.floating):
+        return float(value)
+    elif isinstance(value, np.bool_):
+        return bool(value)
+    else:
+        return value
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -526,7 +535,9 @@ def profile_column(
     
     # single value ------------------------------------------------------------------
     if s.nunique() == 1:
-        return OneValueProfile(missing_prob=missing_prob, value=s.iloc[0])
+        raw_value = s.iloc[0]
+        python_value = _convert_numpy_to_python(raw_value)
+        return OneValueProfile(missing_prob=missing_prob, value=python_value)
 
     # bool  ------------------------------------------------------------------
     if BoolProfile.type_check(s):
@@ -545,7 +556,8 @@ def profile_column(
         
         # Check if quantiles created min=max (effectively single value)
         if lo == hi:
-            return OneValueProfile(missing_prob=missing_prob, value=float(lo))       # type: ignore[arg-type]
+            python_value = _convert_numpy_to_python(lo)
+            return OneValueProfile(missing_prob=missing_prob, value=python_value)       # type: ignore[arg-type]
         
         # Only use IntProfile if the original dtype is actually integer
         if is_integer_dtype(s):
