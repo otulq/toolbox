@@ -4,7 +4,7 @@ from importune import importunity
 with importunity():
     from ..profile_df import (
         FloatProfile, IntProfile, BoolProfile, DateProfile, DateStrProfile,
-        StringProfile, profile_column, DataFrameProfile
+        StringProfile, NullProfile, OneValueProfile, profile_column, DataFrameProfile
     )
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -53,6 +53,91 @@ def test_StringProfile_sample():
     assert set(_non_none(prof.samples(50))).issubset({"A", "B"})
 
 # ────────────────────────────────────────────────────────────────────────────
+# NullProfile
+# ────────────────────────────────────────────────────────────────────────────
+def test_NullProfile_sample():
+    prof = NullProfile()
+    assert prof.sample() is None
+    assert all(x is None for x in prof.samples(20))
+
+def test_NullProfile_has_nulls():
+    prof = NullProfile()
+    assert prof.has_nulls() is True
+    assert prof.missing_prob == 1.0
+
+def test_NullProfile_sample_script():
+    prof = NullProfile()
+    assert prof.sample_script() == "None"
+    assert prof.sample_script(ignore_missing=True) == "None"
+
+def test_NullProfile_contains():
+    prof = NullProfile()
+    assert None in prof
+    assert 42 not in prof
+    assert "hello" not in prof
+
+# ────────────────────────────────────────────────────────────────────────────
+# OneValueProfile
+# ────────────────────────────────────────────────────────────────────────────
+def test_OneValueProfile_sample_no_missing():
+    prof = OneValueProfile(missing_prob=0.0, value=42)
+    vals = prof.samples(20)
+    assert all(x == 42 for x in vals)
+
+def test_OneValueProfile_sample_with_missing():
+    prof = OneValueProfile(missing_prob=0.8, value="hello")
+    vals = prof.samples(100)
+    non_null_vals = _non_none(vals)
+    null_vals = [x for x in vals if x is None]
+    
+    # Should have some nulls due to high missing probability
+    assert len(null_vals) > 0
+    # All non-null values should be "hello"
+    assert all(x == "hello" for x in non_null_vals)
+
+def test_OneValueProfile_sample_script_string():
+    prof = OneValueProfile(missing_prob=0.0, value="test")
+    assert prof.sample_script() == "'test'"
+    
+    prof_with_missing = OneValueProfile(missing_prob=0.3, value="test")
+    script = prof_with_missing.sample_script()
+    assert "'test'" in script
+    assert "random.random()" in script
+    assert "else None" in script
+
+def test_OneValueProfile_sample_script_numeric():
+    prof = OneValueProfile(missing_prob=0.0, value=42)
+    assert prof.sample_script() == "42"
+    
+    prof_float = OneValueProfile(missing_prob=0.0, value=3.14)
+    assert prof_float.sample_script() == "3.14"
+
+def test_OneValueProfile_sample_script_bool():
+    prof_true = OneValueProfile(missing_prob=0.0, value=True)
+    assert prof_true.sample_script() == "True"
+    
+    prof_false = OneValueProfile(missing_prob=0.0, value=False)
+    assert prof_false.sample_script() == "False"
+
+def test_OneValueProfile_sample_script_date():
+    test_date = date(2023, 9, 2)
+    prof = OneValueProfile(missing_prob=0.0, value=test_date)
+    script = prof.sample_script()
+    assert "date.fromisoformat('2023-09-02')" in script
+
+def test_OneValueProfile_contains():
+    prof = OneValueProfile(missing_prob=0.2, value=42)
+    assert 42 in prof
+    assert 43 not in prof
+    assert None in prof  # because missing_prob > 0
+
+def test_OneValueProfile_contains_no_missing():
+    prof = OneValueProfile(missing_prob=0.0, value="hello")
+    assert "hello" in prof
+    assert "world" not in prof
+    assert None not in prof  # because missing_prob == 0
+
+# ────────────────────────────────────────────────────────────────────────────
 # profile_column – numeric inference
 # ────────────────────────────────────────────────────────────────────────────
 def test_profile_column_numeric():
@@ -61,6 +146,53 @@ def test_profile_column_numeric():
     assert isinstance(prof, FloatProfile)  # pandas upcasts to float with nulls
     assert prof.min == 1.2 and prof.max == 2.8  # 10th and 90th percentiles
     assert prof.missing_prob == 0.25
+
+# ────────────────────────────────────────────────────────────────────────────
+# profile_column – null column inference
+# ────────────────────────────────────────────────────────────────────────────
+def test_profile_column_all_null():
+    df = pd.DataFrame({"x": [None, None, None, None]})
+    prof = profile_column(df, column="x")
+    assert isinstance(prof, NullProfile)
+    assert prof.missing_prob == 1.0
+
+def test_profile_column_all_null_mixed_types():
+    df = pd.DataFrame({"x": [None, pd.NaT, pd.NA, None]})
+    prof = profile_column(df, column="x")
+    assert isinstance(prof, NullProfile)
+    assert prof.missing_prob == 1.0
+
+# ────────────────────────────────────────────────────────────────────────────
+# profile_column – single value inference
+# ────────────────────────────────────────────────────────────────────────────
+def test_profile_column_single_value_no_nulls():
+    df = pd.DataFrame({"x": [42, 42, 42, 42]})
+    prof = profile_column(df, column="x")
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value == 42
+    assert prof.missing_prob == 0.0
+
+def test_profile_column_single_value_with_nulls():
+    df = pd.DataFrame({"x": ["hello", "hello", None, "hello"]})
+    prof = profile_column(df, column="x")
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value == "hello"
+    assert prof.missing_prob == 0.25
+
+def test_profile_column_single_value_bool():
+    df = pd.DataFrame({"x": [True, True, True, None]})
+    prof = profile_column(df, column="x")
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value is True
+    assert prof.missing_prob == 0.25
+
+def test_profile_column_single_value_date():
+    test_date = date(2023, 9, 2)
+    df = pd.DataFrame({"x": [test_date, test_date, test_date]})
+    prof = profile_column(df, column="x")
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value == test_date
+    assert prof.missing_prob == 0.0
 
 # ────────────────────────────────────────────────────────────────────────────
 # profile_column – date-string inference

@@ -5,7 +5,7 @@ from importune import importunity
 with importunity():
     from ..profile_df import (
         FloatProfile, IntProfile, BoolProfile, DateProfile, DateStrProfile,
-        StringProfile, profile_column, DataFrameProfile
+        StringProfile, NullProfile, OneValueProfile, profile_column, DataFrameProfile
     )
 
 
@@ -176,6 +176,106 @@ def test_string_profile_sample_script():
         result = eval(script)
         if result is not None:
             assert result in ["A", "B", "C"]
+
+
+def test_null_profile_sample_script():
+    """Test NullProfile.sample_script() method."""
+    profile = NullProfile()
+    script = profile.sample_script()
+    assert script == "None"
+    
+    # Test that script always returns None
+    for _ in range(10):
+        result = eval(script)
+        assert result is None
+    
+    # Test ignore_missing (should still return None)
+    script_ignore = profile.sample_script(ignore_missing=True)
+    assert script_ignore == "None"
+    
+    for _ in range(10):
+        result = eval(script_ignore)
+        assert result is None
+
+
+def test_one_value_profile_sample_script():
+    """Test OneValueProfile.sample_script() method."""
+    # Test string value without nulls
+    profile_str = OneValueProfile(missing_prob=0.0, value="hello")
+    script = profile_str.sample_script()
+    assert script == "'hello'"
+    
+    # Test that script returns the string value
+    for _ in range(10):
+        result = eval(script)
+        assert result == "hello"
+    
+    # Test string value with nulls
+    profile_str_nulls = OneValueProfile(missing_prob=0.3, value="world")
+    script = profile_str_nulls.sample_script()
+    assert script == "'world' if random.random() < 0.7 else None"
+    
+    for _ in range(10):
+        result = eval(script)
+        if result is not None:
+            assert result == "world"
+    
+    # Test integer value without nulls
+    profile_int = OneValueProfile(missing_prob=0.0, value=42)
+    script = profile_int.sample_script()
+    assert script == "42"
+    
+    for _ in range(10):
+        result = eval(script)
+        assert result == 42
+    
+    # Test integer value with nulls
+    profile_int_nulls = OneValueProfile(missing_prob=0.2, value=99)
+    script = profile_int_nulls.sample_script()
+    assert script == "99 if random.random() < 0.8 else None"
+    
+    for _ in range(10):
+        result = eval(script)
+        if result is not None:
+            assert result == 99
+    
+    # Test boolean value
+    profile_bool = OneValueProfile(missing_prob=0.0, value=True)
+    script = profile_bool.sample_script()
+    assert script == "True"
+    
+    for _ in range(10):
+        result = eval(script)
+        assert result is True
+    
+    # Test date value
+    test_date = date(2023, 9, 2)
+    profile_date = OneValueProfile(missing_prob=0.0, value=test_date)
+    script = profile_date.sample_script()
+    assert script == "date.fromisoformat('2023-09-02')"
+    
+    for _ in range(10):
+        result = eval(script)
+        assert result == test_date
+    
+    # Test date value with nulls
+    profile_date_nulls = OneValueProfile(missing_prob=0.1, value=test_date)
+    script = profile_date_nulls.sample_script()
+    assert script == "date.fromisoformat('2023-09-02') if random.random() < 0.9 else None"
+    
+    for _ in range(10):
+        result = eval(script)
+        if result is not None:
+            assert result == test_date
+    
+    # Test ignore_missing with nulls
+    profile_with_nulls = OneValueProfile(missing_prob=0.5, value="test")
+    script_ignore = profile_with_nulls.sample_script(ignore_missing=True)
+    assert script_ignore == "'test'"
+    
+    for _ in range(10):
+        result = eval(script_ignore)
+        assert result == "test"
 
 
 def test_samples_script_single_line():
@@ -390,3 +490,47 @@ def test_samples_script_execution():
     result = eval(script)
     assert len(result) == 10
     assert all(x is None or (isinstance(x, int) and 1 <= x <= 3) for x in result)
+
+
+def test_null_profile_samples_script():
+    """Test NullProfile.samples_script() method."""
+    profile = NullProfile()
+    
+    # Test single line
+    script = profile.samples_script(5, single_line=True)
+    assert script == "[None for _ in range(5)]"
+    
+    # Test that script generates list of Nones
+    result = eval(script)
+    assert len(result) == 5
+    assert all(x is None for x in result)
+    
+    # Test multi-line
+    script_multi = profile.samples_script(3, single_line=False)
+    expected_multi = "[\n    None\n    for _ in range(3)\n]"
+    assert script_multi == expected_multi
+
+
+def test_one_value_profile_samples_script():
+    """Test OneValueProfile.samples_script() method."""
+    # Test without nulls
+    profile = OneValueProfile(missing_prob=0.0, value="hello")
+    script = profile.samples_script(3, single_line=True)
+    assert script == "['hello' for _ in range(3)]"
+    
+    # Test that script generates list of the value
+    result = eval(script)
+    assert len(result) == 3
+    assert all(x == "hello" for x in result)
+    
+    # Test with nulls
+    profile_with_nulls = OneValueProfile(missing_prob=0.4, value=42)
+    script = profile_with_nulls.samples_script(4, single_line=True)
+    expected = "[42 if random.random() < 0.6 else None for _ in range(4)]"
+    assert script == expected
+    
+    # Test that script can generate the value or None
+    for _ in range(10):
+        result = eval(script)
+        assert len(result) == 4
+        assert all(x == 42 or x is None for x in result)

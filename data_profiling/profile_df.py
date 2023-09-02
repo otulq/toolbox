@@ -101,6 +101,83 @@ class ColumnProfile(_SampleMixin):
         """Check if the value is of the correct type for this profile."""
         return cls._type_check(value)
 
+# ────────────────────────────────────────────────────────────────────────────
+# special profiles
+# ────────────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class NullProfile(ColumnProfile):
+    type: Literal['null'] = 'null'
+    missing_prob: float = 1.0
+
+    def __str__(self) -> str:
+        return f"NullProfile()"
+
+    def sample(self) -> None:
+        return None
+
+    def sample_script(self, ignore_missing: bool = False) -> str:
+        return "None"
+    
+    def samples_script(self, n: int, indent: str = '    ', single_line: bool = True) -> str:
+        # Override to always return simple None list since we're always null
+        if single_line:
+            return f"[None for _ in range({n})]"
+        else:
+            return f"[\n{indent}None\n{indent}for _ in range({n})\n]"
+
+    @classmethod
+    def _type_check(cls, value: Union[None, pd.Series]) -> bool:
+        return value is None
+
+    def _contains_single_value(self, value: None) -> bool:
+        return value is None
+
+    def has_nulls(self) -> bool:
+        return True
+
+@dataclass(frozen=True)
+class OneValueProfile(ColumnProfile):
+    missing_prob: float
+    value: Union[float, int, str, bool, date]
+    type: Literal['single_value'] = 'single_value'
+    
+    def __str__(self) -> str:
+        return f"OneValueProfile(value={self.value}, missing_prob={self.missing_prob})"
+    
+    def sample(self) -> Optional[Union[float, int, str, bool, date]]:
+        if self._maybe_missing():
+            return None
+        return self.value
+    
+    def sample_script(self, ignore_missing: bool = False) -> str:
+        if ignore_missing or self.missing_prob == 0.0:
+            if isinstance(self.value, str):
+                return f"'{self.value}'"
+            elif isinstance(self.value, (float, int, bool)):
+                return f"{self.value}"
+            elif isinstance(self.value, date):
+                return f"date.fromisoformat('{self.value.isoformat()}')"
+            else:
+                raise ValueError(f"Invalid value type: {type(self.value)}")
+        else:
+            if isinstance(self.value, str):
+                return f"'{self.value}' if random.random() < {1 - self.missing_prob} else None"
+            elif isinstance(self.value, (float, int, bool)):
+                return f"{self.value} if random.random() < {1 - self.missing_prob} else None"
+            elif isinstance(self.value, date):
+                return f"date.fromisoformat('{self.value.isoformat()}') if random.random() < {1 - self.missing_prob} else None"
+            else:
+                raise ValueError(f"Invalid value type: {type(self.value)}")
+    
+    @classmethod
+    def _type_check(cls, value: Union[float, int, str, bool, date, pd.Series]) -> bool:
+        return isinstance(value, (float, int, str, bool, date))
+    
+    def _contains_single_value(self, value: Union[float, int, str, bool, date]) -> bool:
+        return value == self.value
+
+
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # numeric profiles
@@ -433,6 +510,7 @@ def profile_column(
 ) -> Union[
     FloatProfile, IntProfile, DateStrProfile,
     StringProfile, DateProfile, BoolProfile,
+    NullProfile, OneValueProfile,
 ]:
     """
     Build a ColumnProfile for *df[column]*:
@@ -441,6 +519,14 @@ def profile_column(
     """
     s = df[column]
     missing_prob = float(round(s.isna().mean(), 2))
+
+    # null ------------------------------------------------------------------
+    if s.isna().all():
+        return NullProfile()
+    
+    # single value ------------------------------------------------------------------
+    if s.nunique() == 1:
+        return OneValueProfile(missing_prob=missing_prob, value=s.iloc[0])
 
     # bool  ------------------------------------------------------------------
     if BoolProfile.type_check(s):
