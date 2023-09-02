@@ -36,6 +36,35 @@ def _convert_numpy_to_python(value: Any) -> Any:
         return value
 
 
+def _format_float_for_script(value: float, other_value: Optional[float] = None) -> str:
+    """
+    Format a float for script generation with intelligent rounding.
+    
+    Args:
+        value: The float to format
+        other_value: Another value to ensure we don't round to the same thing
+        
+    Returns:
+        Clean string representation of the float
+    """
+    if pd.isna(value) or value is None:
+        return str(value)
+    
+    # Try different precision levels
+    for precision in [2, 3, 4, 5, 6]:
+        rounded = round(value, precision)
+        if other_value is None:
+            return str(rounded)
+        
+        # Make sure rounding doesn't make values equal
+        other_rounded = round(other_value, precision)
+        if rounded != other_rounded:
+            return str(rounded)
+    
+    # If all else fails, use the original value
+    return str(value)
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # mix-in for “maybe missing” logic
 # ────────────────────────────────────────────────────────────────────────────
@@ -73,23 +102,31 @@ class ColumnProfile(_SampleMixin):
     def samples(self, n: int) -> List[Optional[Union[float, int, str, date]]]:
         return [self.sample() for _ in range(n)]
 
-    def samples_script(self, n: int, indent: str = '    ', single_line: bool = True) -> str:
+    def samples_script(self, n: int, indent: str = '    ', single_line: bool = True, 
+                      use_variable: bool = False, variable_name: str = "n_values") -> str:
+        # Choose the range expression based on use_variable parameter
+        range_expr = variable_name if use_variable else str(n)
+        
         if not self.has_nulls():
             if single_line:
-                return f"[{self.sample_script()} for _ in range({n})]"
+                return f"[{self.sample_script()} for _ in range({range_expr})]"
             else:
-                return f"[\n{indent}{self.sample_script()}\n{indent}for _ in range({n})\n]"
+                return f"[\n{indent}{self.sample_script()}\n{indent}for _ in range({range_expr})\n]"
+        
+        # Format the probability cleanly
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        
         if single_line:
             return (
                 f'[{self.sample_script(ignore_missing=True)} '
-                f'if random.random() < {1 - self.missing_prob} else None '
-                f'for _ in range({n})]'
+                f'if random.random() < {prob_str} else None '
+                f'for _ in range({range_expr})]'
             )
         else:
             return (
                 f'[\n{indent}{self.sample_script(ignore_missing=True)} '
-                f'if random.random() < {1 - self.missing_prob} else None'
-                f'\n{indent}for _ in range({n})\n]'
+                f'if random.random() < {prob_str} else None'
+                f'\n{indent}for _ in range({range_expr})\n]'
             )
 
     def _contains_single_value(self, value: Union[float, int, str, date]) -> bool:
@@ -127,12 +164,16 @@ class NullProfile(ColumnProfile):
     def sample_script(self, ignore_missing: bool = False) -> str:
         return "None"
     
-    def samples_script(self, n: int, indent: str = '    ', single_line: bool = True) -> str:
+    def samples_script(self, n: int, indent: str = '    ', single_line: bool = True,
+                      use_variable: bool = False, variable_name: str = "n_values") -> str:
         # Override to always return simple None list since we're always null
+        # Choose the range expression based on use_variable parameter
+        range_expr = variable_name if use_variable else str(n)
+        
         if single_line:
-            return f"[None for _ in range({n})]"
+            return f"[None for _ in range({range_expr})]"
         else:
-            return f"[\n{indent}None\n{indent}for _ in range({n})\n]"
+            return f"[\n{indent}None\n{indent}for _ in range({range_expr})\n]"
 
     @classmethod
     def _type_check(cls, value: Union[None, pd.Series]) -> bool:
@@ -163,18 +204,26 @@ class OneValueProfile(ColumnProfile):
             if isinstance(self.value, str):
                 return f"'{self.value}'"
             elif isinstance(self.value, (float, int, bool)):
-                return f"{self.value}"
+                if isinstance(self.value, float):
+                    return _format_float_for_script(self.value)
+                else:
+                    return f"{self.value}"
             elif isinstance(self.value, date):
                 return f"date.fromisoformat('{self.value.isoformat()}')"
             else:
                 raise ValueError(f"Invalid value type: {type(self.value)}")
         else:
+            missing_prob_str = _format_float_for_script(1 - self.missing_prob)
             if isinstance(self.value, str):
-                return f"'{self.value}' if random.random() < {1 - self.missing_prob} else None"
+                return f"'{self.value}' if random.random() < {missing_prob_str} else None"
             elif isinstance(self.value, (float, int, bool)):
-                return f"{self.value} if random.random() < {1 - self.missing_prob} else None"
+                if isinstance(self.value, float):
+                    value_str = _format_float_for_script(self.value)
+                    return f"{value_str} if random.random() < {missing_prob_str} else None"
+                else:
+                    return f"{self.value} if random.random() < {missing_prob_str} else None"
             elif isinstance(self.value, date):
-                return f"date.fromisoformat('{self.value.isoformat()}') if random.random() < {1 - self.missing_prob} else None"
+                return f"date.fromisoformat('{self.value.isoformat()}') if random.random() < {missing_prob_str} else None"
             else:
                 raise ValueError(f"Invalid value type: {type(self.value)}")
     
@@ -209,9 +258,14 @@ class FloatProfile(ColumnProfile):
         return random.uniform(self.min, self.max)
 
     def sample_script(self, ignore_missing: bool = False) -> str:
+        min_str = _format_float_for_script(self.min, self.max)
+        max_str = _format_float_for_script(self.max, self.min)
+        
         if not self.has_nulls() or ignore_missing:
-            return f"random.uniform({self.min}, {self.max})"
-        return f"random.uniform({self.min}, {self.max}) if random.random() < {1 - self.missing_prob} else None"
+            return f"random.uniform({min_str}, {max_str})"
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"random.uniform({min_str}, {max_str}) if random.random() < {prob_str} else None"
 
     # incorrect_sample kept exactly as you wrote
     def incorrect_sample(self, margin: float) -> float:
@@ -263,7 +317,9 @@ class IntProfile(ColumnProfile):
     def sample_script(self, ignore_missing: bool = False) -> str:
         if not self.has_nulls() or ignore_missing:
             return f"random.randint({self.min}, {self.max})"
-        return f"random.randint({self.min}, {self.max}) if random.random() < {1 - self.missing_prob} else None"
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"random.randint({self.min}, {self.max}) if random.random() < {prob_str} else None"
 
     @classmethod
     def _type_check(cls, value: Union[int, pd.Series]) -> bool:
@@ -301,9 +357,13 @@ class BoolProfile(ColumnProfile):
         return random.random() < self.true_prob if not np.isnan(self.true_prob) else None
 
     def sample_script(self, ignore_missing: bool = False) -> str:
+        prob_str = _format_float_for_script(self.true_prob)
+        
         if not self.has_nulls() or ignore_missing:
-            return f"random.random() < {self.true_prob}"
-        return f"random.random() < {self.true_prob} if random.random() < {1 - self.missing_prob} else None"
+            return f"random.random() < {prob_str}"
+        
+        missing_prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"random.random() < {prob_str} if random.random() < {missing_prob_str} else None"
 
     @classmethod
     def _type_check(cls, value: Union[bool, pd.Series]) -> bool:
@@ -366,7 +426,9 @@ class DateProfile(ColumnProfile):
         base_script = f"date.fromisoformat('{min_iso}') + timedelta(days=random.randint(0, (date.fromisoformat('{max_iso}') - date.fromisoformat('{min_iso}')).days))"
         if not self.has_nulls() or ignore_missing:
             return base_script
-        return f"{base_script} if random.random() < {1 - self.missing_prob} else None"
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"{base_script} if random.random() < {prob_str} else None"
 
     @classmethod
     def _type_check(cls, value: Union[date, pd.Series]) -> bool:
@@ -425,7 +487,9 @@ class DateStrProfile(ColumnProfile):
         base_script = f"(date.fromisoformat('{self.min}') + timedelta(days=random.randint(0, (date.fromisoformat('{self.max}') - date.fromisoformat('{self.min}')).days))).isoformat()"
         if not self.has_nulls() or ignore_missing:
             return base_script
-        return f"{base_script} if random.random() < {1 - self.missing_prob} else None"
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"{base_script} if random.random() < {prob_str} else None"
 
     @classmethod
     def _type_check(cls, value: Union[str, pd.Series]) -> bool:
@@ -485,7 +549,9 @@ class StringProfile(ColumnProfile):
         base_script = f"random.choice({values_repr})"
         if not self.has_nulls() or ignore_missing:
             return base_script
-        return f"{base_script} if random.random() < {1 - self.missing_prob} else None"
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"{base_script} if random.random() < {prob_str} else None"
 
     @classmethod
     def _type_check(cls, value: Union[str, pd.Series]) -> bool:
@@ -674,26 +740,34 @@ class DataFrameProfile:
     def generate_row(self) -> pd.Series:
         return pd.Series(self.generate_dict())
 
-    def generate_df_script(self, num_rows: int, indent: str = '    ') -> str:
+    def generate_df_script(self, num_rows: int, indent: str = '    ', 
+                          use_variable: bool = False, variable_name: str = "n_values") -> str:
         """
         Generate a script to generate a DataFrame with the same structure as the profile.
-        For example:
-        pd.DataFrame({
-            'string_col': [random.choice(['a', 'b', 'c']) for _ in range({num_rows})],
-            'string_col_with_nulls': [random.choice(['a', 'b', 'c']) if random.random() < 0.1 else None for _ in range({num_rows})],
-            'int_col': [random.randint(0, 10) for _ in range({num_rows})],
-            'int_col_with_nulls_is_float': [random.randint(0, 10) if random.random() < 0.1 else None for _ in range({num_rows})],
-            'float_col': [random.uniform(0, 10) for _ in range({num_rows})],
-            'float_col_with_nulls': [random.uniform(0, 10) if random.random() < 0.1 else None for _ in range({num_rows})],
-            'date_col': [date.fromisoformat('2021-01-01') + timedelta(days=random.randint(0, 365)) for _ in range({num_rows})],
-            'date_col_with_nulls': [date.fromisoformat('2021-01-01') + timedelta(days=random.randint(0, 365)) if random.random() < 0.1 else None for _ in range({num_rows})],
-            'bool_col': [random.random() < 0.5 for _ in range({num_rows})],
-            'bool_col_with_nulls': [random.random() < 0.5 if random.random() < 0.1 else None for _ in range({num_rows})],
-            'date_str_col': [date.fromisoformat('2021-01-01') + timedelta(days=random.randint(0, 365)) for _ in range({num_rows})],
-            'date_str_col_with_nulls': [date.fromisoformat('2021-01-01') + timedelta(days=random.randint(0, 365)) if random.random() < 0.1 else None for _ in range({num_rows})],
+        
+        Args:
+            num_rows: Number of rows to generate (used when use_variable=False)
+            indent: Indentation string for multi-line formatting
+            use_variable: If True, use variable_name instead of hard-coding num_rows
+            variable_name: Variable name to use when use_variable=True
+            
+        Returns:
+            String containing executable Python code to generate a DataFrame
+            
+        Example with use_variable=False (default):
+            pd.DataFrame({
+                'int_col': [random.randint(0, 10) for _ in range(100)],
+                'str_col': [random.choice(['a', 'b']) for _ in range(100)]
+            })
+            
+        Example with use_variable=True:
+            pd.DataFrame({
+                'int_col': [random.randint(0, 10) for _ in range(n_values)],
+                'str_col': [random.choice(['a', 'b']) for _ in range(n_values)]
+            })
         """
         middle_part = ",\n".join(
-            f"{indent}'{col}': {profile.samples_script(num_rows, single_line=True)}"
+            f"{indent}'{col}': {profile.samples_script(num_rows, single_line=True, use_variable=use_variable, variable_name=variable_name)}"
             for col, profile in self.column_profiles.items()
         )
         return (

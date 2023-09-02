@@ -534,3 +534,231 @@ def test_one_value_profile_samples_script():
         result = eval(script)
         assert len(result) == 4
         assert all(x == 42 or x is None for x in result)
+
+
+def test_samples_script_with_variable():
+    """Test samples_script() with use_variable parameter."""
+    # Test IntProfile without nulls
+    profile = IntProfile(missing_prob=0.0, min=1, max=10)
+    
+    # Default behavior (hard-coded)
+    script_default = profile.samples_script(5)
+    assert script_default == "[random.randint(1, 10) for _ in range(5)]"
+    
+    # With variable (default name)
+    script_var = profile.samples_script(5, use_variable=True)
+    assert script_var == "[random.randint(1, 10) for _ in range(n_values)]"
+    
+    # With custom variable name
+    script_custom = profile.samples_script(5, use_variable=True, variable_name="num_rows")
+    assert script_custom == "[random.randint(1, 10) for _ in range(num_rows)]"
+    
+    # Test with nulls
+    profile_nulls = FloatProfile(missing_prob=0.3, min=1.0, max=10.0)
+    script_nulls = profile_nulls.samples_script(3, use_variable=True)
+    expected = "[random.uniform(1.0, 10.0) if random.random() < 0.7 else None for _ in range(n_values)]"
+    assert script_nulls == expected
+    
+    # Test multi-line
+    script_multi = profile.samples_script(4, single_line=False, use_variable=True)
+    expected_multi = "[\n    random.randint(1, 10)\n    for _ in range(n_values)\n]"
+    assert script_multi == expected_multi
+
+
+def test_null_profile_samples_script_with_variable():
+    """Test NullProfile.samples_script() with use_variable parameter."""
+    profile = NullProfile()
+    
+    # Default behavior
+    script_default = profile.samples_script(3)
+    assert script_default == "[None for _ in range(3)]"
+    
+    # With variable
+    script_var = profile.samples_script(3, use_variable=True)
+    assert script_var == "[None for _ in range(n_values)]"
+    
+    # With custom variable name
+    script_custom = profile.samples_script(3, use_variable=True, variable_name="sample_count")
+    assert script_custom == "[None for _ in range(sample_count)]"
+    
+    # Multi-line with variable
+    script_multi = profile.samples_script(3, single_line=False, use_variable=True)
+    expected_multi = "[\n    None\n    for _ in range(n_values)\n]"
+    assert script_multi == expected_multi
+
+
+def test_generate_df_script_with_variable():
+    """Test DataFrameProfile.generate_df_script() with use_variable parameter."""
+    # Create simple DataFrame for testing
+    df = pd.DataFrame({
+        'int_col': [1, 2, 3],
+        'str_col': ['A', 'B', 'A']
+    })
+    profile = DataFrameProfile.from_df(df)
+    
+    # Default behavior (hard-coded)
+    script_default = profile.generate_df_script(10)
+    assert "for _ in range(10)" in script_default
+    assert script_default.startswith("pd.DataFrame({")
+    assert "'int_col':" in script_default
+    assert "'str_col':" in script_default
+    
+    # With variable (default name)
+    script_var = profile.generate_df_script(10, use_variable=True)
+    assert "for _ in range(n_values)" in script_var
+    assert "for _ in range(10)" not in script_var
+    assert script_var.startswith("pd.DataFrame({")
+    
+    # With custom variable name
+    script_custom = profile.generate_df_script(10, use_variable=True, variable_name="dataset_size")
+    assert "for _ in range(dataset_size)" in script_custom
+    assert "for _ in range(10)" not in script_custom
+    assert "for _ in range(n_values)" not in script_custom
+    
+    # Test that the script can still execute (with variable defined)
+    import random
+    n_values = 5
+    result = eval(script_var)
+    assert isinstance(result, pd.DataFrame)
+    assert result.shape == (5, 2)
+    assert list(result.columns) == ['int_col', 'str_col']
+    
+    # Test custom variable execution
+    dataset_size = 3
+    result_custom = eval(script_custom)
+    assert isinstance(result_custom, pd.DataFrame)
+    assert result_custom.shape == (3, 2)
+
+
+def test_float_formatting_in_scripts():
+    """Test that float formatting produces clean numbers in scripts."""
+    # Test FloatProfile with messy decimal values
+    profile_messy = FloatProfile(missing_prob=0.0, min=1.23456789, max=9.87654321)
+    script = profile_messy.sample_script()
+    
+    # Should have clean rounded values
+    assert "1.23" in script or "1.234" in script  # Some reasonable rounding
+    assert "9.88" in script or "9.877" in script  # Some reasonable rounding
+    assert "1.23456789" not in script  # Should not have the full precision
+    assert "9.87654321" not in script  # Should not have the full precision
+    
+    # Test that script executes correctly
+    import random
+    result = eval(script)
+    assert isinstance(result, float)
+    assert 1.2 <= result <= 10.0  # Should be in reasonable range
+    
+    # Test OneValueProfile with messy float
+    profile_one = OneValueProfile(missing_prob=0.0, value=3.14159265359)
+    script_one = profile_one.sample_script()
+    assert script_one in ["3.14", "3.141", "3.1416"]  # Should be reasonably rounded
+    assert "3.14159265359" not in script_one
+    
+    # Test BoolProfile with messy probability
+    profile_bool = BoolProfile(missing_prob=0.0, true_prob=0.666666666666)
+    script_bool = profile_bool.sample_script()
+    assert "0.67" in script_bool or "0.667" in script_bool  # Clean rounding
+    assert "0.666666666666" not in script_bool
+
+
+def test_float_formatting_preserves_distinctions():
+    """Test that float formatting keeps different values distinct."""
+    # Test very close values that could round to the same thing
+    profile_close = FloatProfile(missing_prob=0.0, min=1.0001, max=1.0009)
+    script = profile_close.sample_script()
+    
+    # Extract the min and max values from the script
+    import re
+    matches = re.findall(r'random\.uniform\(([^,]+), ([^)]+)\)', script)
+    assert len(matches) == 1
+    min_str, max_str = matches[0]
+    min_val = float(min_str)
+    max_val = float(max_str)
+    
+    # They should be different
+    assert min_val != max_val, f"Values rounded to same: {min_val} == {max_val}"
+    assert min_val < max_val, f"Min should be less than max: {min_val} < {max_val}"
+    
+    # Test with even closer values
+    profile_very_close = FloatProfile(missing_prob=0.0, min=1.00001, max=1.00002)
+    script_very_close = profile_very_close.sample_script()
+    matches = re.findall(r'random\.uniform\(([^,]+), ([^)]+)\)', script_very_close)
+    min_str, max_str = matches[0]
+    min_val = float(min_str)
+    max_val = float(max_str)
+    assert min_val != max_val, "Even very close values should remain distinct"
+
+
+def test_float_formatting_edge_cases():
+    """Test float formatting edge cases."""
+    from profile_df import _format_float_for_script
+    
+    # Test basic rounding
+    assert _format_float_for_script(1.23456) == "1.23"
+    assert _format_float_for_script(9.87654) == "9.88"
+    
+    # Test with other_value to ensure distinction
+    assert _format_float_for_script(1.111111, 1.222222) in ["1.11", "1.111"]
+    assert _format_float_for_script(1.222222, 1.111111) in ["1.22", "1.222"]
+    
+    # Test very close values
+    result1 = _format_float_for_script(1.0001, 1.0002)
+    result2 = _format_float_for_script(1.0002, 1.0001)
+    assert float(result1) != float(result2), f"Close values should be distinct: {result1} != {result2}"
+    
+    # Test exact values
+    assert _format_float_for_script(1.0) == "1.0"
+    assert _format_float_for_script(2.5) == "2.5"
+    
+    # Test None/NaN handling
+    import pandas as pd
+    import numpy as np
+    assert "nan" in _format_float_for_script(np.nan).lower()
+    assert "none" in _format_float_for_script(None).lower()
+
+
+def test_comprehensive_script_formatting():
+    """Test that all script types use clean float formatting."""
+    import pandas as pd
+    
+    # Create DataFrame with messy floats
+    df = pd.DataFrame({
+        'messy_floats': [1.111111111, 2.222222222, 3.333333333],
+        'messy_probs': [True, True, False],  # Will create 0.666666... probability
+        'single_messy': [4.444444444, 4.444444444, 4.444444444]  # OneValueProfile
+    })
+    
+    from profile_df import DataFrameProfile
+    profile = DataFrameProfile.from_df(df)
+    script = profile.generate_df_script(100)
+    
+    # Check that no long decimal numbers appear
+    import re
+    long_decimals = re.findall(r'\d+\.\d{7,}', script)
+    assert len(long_decimals) == 0, f"Found long decimals: {long_decimals}"
+    
+    # Check that script executes without errors
+    import random
+    result = eval(script)
+    assert isinstance(result, pd.DataFrame)
+    assert result.shape == (100, 3)
+
+
+def test_float_formatting_with_missing_values():
+    """Test float formatting in profiles with missing values."""
+    # FloatProfile with nulls
+    profile_nulls = FloatProfile(missing_prob=0.3333333, min=1.111111, max=9.999999)
+    script = profile_nulls.sample_script()
+    
+    # Should have clean formatting for both the range and probability
+    assert "1.11" in script or "1.111" in script
+    assert "10.0" in script or "9.999" in script or "10" in script
+    assert "0.67" in script or "0.667" in script  # 1 - 0.3333 = 0.6667
+    
+    # OneValueProfile with nulls and messy float
+    profile_one_nulls = OneValueProfile(missing_prob=0.2222222, value=2.718281828)
+    script_one_nulls = profile_one_nulls.sample_script()
+    
+    # Should have clean value and clean probability
+    assert "2.72" in script_one_nulls or "2.718" in script_one_nulls
+    assert "0.78" in script_one_nulls or "0.777" in script_one_nulls  # 1 - 0.222 = 0.778
