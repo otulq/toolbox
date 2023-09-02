@@ -3,7 +3,7 @@ from datetime import date, datetime
 from importune import importunity
 with importunity():
     from ..profile_df import (
-        FloatProfile, IntProfile, BoolProfile, DateProfile, DateStrProfile,
+        FloatProfile, IntProfile, FloatStrProfile, IntStrProfile, BoolProfile, DateProfile, DateStrProfile,
         DatetimeProfile, DatetimeStrProfile, StringProfile, NullProfile, OneValueProfile, 
         profile_column, DataFrameProfile
     )
@@ -213,6 +213,118 @@ def test_OneValueProfile_sample_script_datetime():
     script = prof.sample_script()
     assert "datetime.fromisoformat('2023-09-02T08:03:00')" in script
 
+
+# ────────────────────────────────────────────────────────────────────────────
+# FloatStrProfile
+# ────────────────────────────────────────────────────────────────────────────
+def test_FloatStrProfile_sample():
+    prof = FloatStrProfile(missing_prob=0.0, min=1.5, max=9.7)
+    vals = _non_none(prof.samples(50))
+    assert all(isinstance(v, str) for v in vals)
+    # Convert to float to check range
+    float_vals = [float(v) for v in vals]
+    assert all(1.5 <= fv <= 9.7 for fv in float_vals)
+
+
+def test_FloatStrProfile_sample_script():
+    prof = FloatStrProfile(missing_prob=0.0, min=1.5, max=9.7)
+    script = prof.sample_script()
+    assert "str(random.uniform(" in script
+    assert "1.5" in script
+    assert "9.7" in script
+
+
+def test_FloatStrProfile_sample_script_with_missing():
+    prof = FloatStrProfile(missing_prob=0.3, min=1.0, max=5.0)
+    script = prof.sample_script()
+    assert "str(random.uniform(" in script
+    assert "if random.random() <" in script
+    assert "else None" in script
+
+
+def test_FloatStrProfile_type_check():
+    # Test individual float strings
+    assert FloatStrProfile.type_check("1.5")
+    assert FloatStrProfile.type_check("3.14159")
+    assert FloatStrProfile.type_check("1e10")
+    assert not FloatStrProfile.type_check("1")  # Integer string
+    assert not FloatStrProfile.type_check("hello")  # Non-numeric string
+    assert not FloatStrProfile.type_check(1.5)  # Actual float
+    
+    # Test pandas series of float strings
+    df_float_str = pd.DataFrame({"x": ["1.5", "2.3", "4.7", "1.2"]})
+    assert FloatStrProfile.type_check(df_float_str["x"])
+    
+    # Test that integer strings don't match
+    df_int_str = pd.DataFrame({"x": ["1", "2", "3"]})
+    assert not FloatStrProfile.type_check(df_int_str["x"])
+
+
+def test_FloatStrProfile_contains():
+    prof = FloatStrProfile(missing_prob=0.0, min=1.0, max=5.0)
+    assert prof.contains("3.5")
+    assert prof.contains("1.0")
+    assert prof.contains("5.0")
+    assert not prof.contains("0.5")  # Below min
+    assert not prof.contains("6.0")  # Above max
+    assert not prof.contains("hello")  # Non-numeric
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# IntStrProfile
+# ────────────────────────────────────────────────────────────────────────────
+def test_IntStrProfile_sample():
+    prof = IntStrProfile(missing_prob=0.0, min=10, max=50)
+    vals = _non_none(prof.samples(50))
+    assert all(isinstance(v, str) for v in vals)
+    # Convert to int to check range
+    int_vals = [int(v) for v in vals]
+    assert all(10 <= iv <= 50 for iv in int_vals)
+
+
+def test_IntStrProfile_sample_script():
+    prof = IntStrProfile(missing_prob=0.0, min=10, max=50)
+    script = prof.sample_script()
+    assert "str(random.randint(" in script
+    assert "10" in script
+    assert "50" in script
+
+
+def test_IntStrProfile_sample_script_with_missing():
+    prof = IntStrProfile(missing_prob=0.2, min=1, max=10)
+    script = prof.sample_script()
+    assert "str(random.randint(" in script
+    assert "if random.random() <" in script
+    assert "else None" in script
+
+
+def test_IntStrProfile_type_check():
+    # Test individual int strings
+    assert IntStrProfile.type_check("1")
+    assert IntStrProfile.type_check("42")
+    assert IntStrProfile.type_check("999")
+    assert not IntStrProfile.type_check("1.5")  # Float string
+    assert not IntStrProfile.type_check("hello")  # Non-numeric string
+    assert not IntStrProfile.type_check(42)  # Actual int
+    
+    # Test pandas series of int strings
+    df_int_str = pd.DataFrame({"x": ["1", "42", "999"]})
+    assert IntStrProfile.type_check(df_int_str["x"])
+    
+    # Test that float strings don't match
+    df_float_str = pd.DataFrame({"x": ["1.5", "2.3", "4.7"]})
+    assert not IntStrProfile.type_check(df_float_str["x"])
+
+
+def test_IntStrProfile_contains():
+    prof = IntStrProfile(missing_prob=0.0, min=10, max=50)
+    assert prof.contains("25")
+    assert prof.contains("10")
+    assert prof.contains("50")
+    assert not prof.contains("5")  # Below min
+    assert not prof.contains("55")  # Above max
+    assert not prof.contains("hello")  # Non-numeric
+
 def test_OneValueProfile_contains():
     prof = OneValueProfile(missing_prob=0.2, value=42)
     assert 42 in prof
@@ -408,6 +520,63 @@ def test_profile_column_single_value_datetime():
     assert isinstance(prof, OneValueProfile)
     assert prof.value == test_datetime
     assert prof.missing_prob == 0.0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# profile_column – numeric string inference
+# ────────────────────────────────────────────────────────────────────────────
+def test_profile_column_int_str():
+    # Test column with integer strings
+    df = pd.DataFrame({"int_str": ["1", "42", "15", None]})
+    prof = profile_column(df, column="int_str")
+    assert isinstance(prof, IntStrProfile)
+    assert prof.min == 1
+    assert prof.max == 42
+    assert prof.missing_prob == 0.25
+
+
+def test_profile_column_float_str():
+    # Test column with float strings
+    df = pd.DataFrame({"float_str": ["1.5", "2.3", "4.7", None]})
+    prof = profile_column(df, column="float_str")
+    assert isinstance(prof, FloatStrProfile)
+    assert prof.min == 1.5
+    assert prof.max == 4.7
+    assert prof.missing_prob == 0.25
+
+
+def test_profile_column_float_str_scientific():
+    # Test column with scientific notation
+    df = pd.DataFrame({"sci_str": ["1e2", "2.5e1", "3.14e0"]})
+    prof = profile_column(df, column="sci_str")
+    assert isinstance(prof, FloatStrProfile)
+    assert prof.min == 3.14
+    assert prof.max == 100.0
+    assert prof.missing_prob == 0.0
+
+
+def test_profile_column_numeric_str_vs_categorical():
+    # Test that mixed numeric/non-numeric strings fall back to StringProfile
+    df = pd.DataFrame({"mixed": ["1", "hello", "2.5", "world"]})
+    prof = profile_column(df, column="mixed")
+    assert isinstance(prof, StringProfile)
+    assert set(prof.values) == {"1", "2.5", "hello", "world"}
+
+
+def test_profile_column_int_str_vs_float_str():
+    # Test that integer strings are detected as IntStrProfile, not FloatStrProfile
+    df = pd.DataFrame({"pure_ints": ["1", "2", "3", "42"]})
+    prof = profile_column(df, column="pure_ints")
+    assert isinstance(prof, IntStrProfile)
+    assert not isinstance(prof, FloatStrProfile)
+
+
+def test_profile_column_single_value_numeric_str():
+    # Test single value numeric strings
+    df = pd.DataFrame({"single_int": ["42", "42", "42"]})
+    prof = profile_column(df, column="single_int")
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value == "42"
 
 
 # ────────────────────────────────────────────────────────────────────────────
