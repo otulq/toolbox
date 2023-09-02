@@ -141,6 +141,41 @@ def test_profile_column_zero_vs_zero_decimal():
     assert isinstance(prof_float_zero, FloatStrProfile)
 
 
+def test_profile_column_mixed_numeric_int_float():
+    """Test that mixed int/float strings become FloatStrProfile (not StringProfile)."""
+    # This is the key case we fixed - mixed numeric should be treated as numeric range
+    df_mixed_numeric = pd.DataFrame({"col": ["23.14", "42", "100", "12.123"]})
+    prof_mixed_numeric = profile_column(df_mixed_numeric, column="col")
+    assert isinstance(prof_mixed_numeric, FloatStrProfile)
+    assert prof_mixed_numeric.min == 12.123
+    assert prof_mixed_numeric.max == 100.0
+    # Should generate uniform range, not categorical choice
+    script = prof_mixed_numeric.sample_script()
+    assert "random.uniform" in script
+    assert "random.choice" not in script
+
+
+def test_profile_column_mixed_detection_edge_cases():
+    """Test edge cases for mixed numeric detection."""
+    # Pure ints should remain IntStrProfile (no mixed treatment)
+    df_pure_int = pd.DataFrame({"col": ["42", "100", "5"]})
+    prof_pure_int = profile_column(df_pure_int, column="col")
+    assert isinstance(prof_pure_int, IntStrProfile)
+    assert prof_pure_int.min == 5
+    assert prof_pure_int.max == 100
+    script = prof_pure_int.sample_script()
+    assert "random.randint" in script
+    
+    # Pure floats should remain FloatStrProfile (no mixed treatment)  
+    df_pure_float = pd.DataFrame({"col": ["23.14", "2341.123"]})
+    prof_pure_float = profile_column(df_pure_float, column="col")
+    assert isinstance(prof_pure_float, FloatStrProfile)
+    assert prof_pure_float.min == 23.14
+    assert prof_pure_float.max == 2341.123
+    script = prof_pure_float.sample_script()
+    assert "random.uniform" in script
+
+
 def test_profile_column_mixed_data_fallback():
     """Test that mixed numeric/text data falls back to StringProfile."""
     df_mixed = pd.DataFrame({"col": ["1", "hello", "2.5", "world"]})
