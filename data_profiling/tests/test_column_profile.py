@@ -194,6 +194,27 @@ def test_profile_column_single_value_date():
     assert prof.value == test_date
     assert prof.missing_prob == 0.0
 
+def test_profile_column_quantile_edge_case():
+    """Test when quantiles create min=max, should return OneValueProfile not FloatProfile."""
+    # Create data where tight quantiles will result in min=max
+    df = pd.DataFrame({"x": [0.0] * 100 + [0.1]})  # 99% zeros
+    prof = profile_column(df, column="x", q_low=0.01, q_high=0.01)
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value == 0.0
+    assert prof.missing_prob == 0.0
+    
+    # Should not generate random.uniform(0.0, 0.0)
+    script = prof.sample_script()
+    assert script == "0.0"
+    assert "random.uniform" not in script
+
+def test_profile_one_value_int():
+    df = pd.DataFrame({"x": [1, 1, 1, None]})
+    prof = profile_column(df, column="x")
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value == 1
+    assert prof.missing_prob == 0.25
+
 # ────────────────────────────────────────────────────────────────────────────
 # profile_column – date-string inference
 # ────────────────────────────────────────────────────────────────────────────

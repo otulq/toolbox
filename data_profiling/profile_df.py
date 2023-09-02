@@ -542,6 +542,11 @@ def profile_column(
                 return IntProfile(missing_prob=missing_prob, min=np.nan, max=np.nan)  # type: ignore[arg-type]
             return FloatProfile(missing_prob=missing_prob, min=np.nan, max=np.nan)    # type: ignore[arg-type]
         lo, hi = clean.quantile([q_low, q_high])
+        
+        # Check if quantiles created min=max (effectively single value)
+        if lo == hi:
+            return OneValueProfile(missing_prob=missing_prob, value=float(lo))       # type: ignore[arg-type]
+        
         # Only use IntProfile if the original dtype is actually integer
         if is_integer_dtype(s):
             return IntProfile(missing_prob=missing_prob, min=int(clean.min()), max=int(clean.max()))    # type: ignore[arg-type]
