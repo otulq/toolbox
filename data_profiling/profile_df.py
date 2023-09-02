@@ -535,7 +535,12 @@ def profile_column(
     
     # single value ------------------------------------------------------------------
     if s.nunique() == 1:
-        raw_value = s.iloc[0]
+        # Get the actual non-null unique value, not just iloc[0] which might be None
+        non_null_values = s.dropna()
+        if non_null_values.empty:
+            # This should be caught by the null check above, but just in case
+            return NullProfile()
+        raw_value = non_null_values.iloc[0]
         python_value = _convert_numpy_to_python(raw_value)
         return OneValueProfile(missing_prob=missing_prob, value=python_value)
 
