@@ -2,7 +2,7 @@
 profile_df.py   column-profiling utilities
 
 • ColumnProfile hierarchy (FloatProfile, IntProfile, BoolProfile,
-  DateProfile, DateStrProfile, StringProfile)
+  DateProfile, DateStrProfile, DatetimeProfile, DatetimeStrProfile, StringProfile)
 • profile_column()    build a profile from an existing DataFrame column
 • DataFrameProfile    convenience wrapper to profile an entire DataFrame
 """
@@ -32,6 +32,10 @@ def _convert_numpy_to_python(value: Any) -> Any:
         return float(value)
     elif isinstance(value, np.bool_):
         return bool(value)
+    elif isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    elif isinstance(value, np.datetime64):
+        return pd.Timestamp(value).to_pydatetime()
     else:
         return value
 
@@ -95,11 +99,11 @@ class ColumnProfile(_SampleMixin):
         return asdict(self)
 
     # sampling helpers
-    def sample(self) -> Optional[Union[float, int, str, date]]:
+    def sample(self) -> Optional[Union[float, int, str, date, datetime]]:
         """Subclasses implement."""
         raise NotImplementedError
 
-    def samples(self, n: int) -> List[Optional[Union[float, int, str, date]]]:
+    def samples(self, n: int) -> List[Optional[Union[float, int, str, date, datetime]]]:
         return [self.sample() for _ in range(n)]
 
     def samples_script(self, n: int, indent: str = '    ', single_line: bool = True, 
@@ -129,11 +133,11 @@ class ColumnProfile(_SampleMixin):
                 f'\n{indent}for _ in range({range_expr})\n]'
             )
 
-    def _contains_single_value(self, value: Union[float, int, str, date]) -> bool:
+    def _contains_single_value(self, value: Union[float, int, str, date, datetime]) -> bool:
         """Subclasses implement."""
         raise NotImplementedError
 
-    def __contains__(self, value: Union[float, int, str, date]) -> bool:
+    def __contains__(self, value: Union[float, int, str, date, datetime]) -> bool:
         if isinstance(value, (list, set, tuple, pd.Series)):
             return all(self.__contains__(v) for v in value)
         if value is None or pd.isna(value):
@@ -143,7 +147,7 @@ class ColumnProfile(_SampleMixin):
     contains = __contains__
 
     @classmethod
-    def type_check(cls, value: Union[float, int, str, date, pd.Series]) -> bool:
+    def type_check(cls, value: Union[float, int, str, date, datetime, pd.Series]) -> bool:
         """Check if the value is of the correct type for this profile."""
         return cls._type_check(value)
 
@@ -188,13 +192,13 @@ class NullProfile(ColumnProfile):
 @dataclass(frozen=True)
 class OneValueProfile(ColumnProfile):
     missing_prob: float
-    value: Union[float, int, str, bool, date]
+    value: Union[float, int, str, bool, date, datetime]
     type: Literal['single_value'] = 'single_value'
     
     def __str__(self) -> str:
         return f"OneValueProfile(value={self.value}, missing_prob={self.missing_prob})"
     
-    def sample(self) -> Optional[Union[float, int, str, bool, date]]:
+    def sample(self) -> Optional[Union[float, int, str, bool, date, datetime]]:
         if self._maybe_missing():
             return None
         return self.value
@@ -208,6 +212,8 @@ class OneValueProfile(ColumnProfile):
                     return _format_float_for_script(self.value)
                 else:
                     return f"{self.value}"
+            elif isinstance(self.value, datetime):
+                return f"datetime.fromisoformat('{self.value.isoformat()}')"
             elif isinstance(self.value, date):
                 return f"date.fromisoformat('{self.value.isoformat()}')"
             else:
@@ -222,16 +228,18 @@ class OneValueProfile(ColumnProfile):
                     return f"{value_str} if random.random() < {missing_prob_str} else None"
                 else:
                     return f"{self.value} if random.random() < {missing_prob_str} else None"
+            elif isinstance(self.value, datetime):
+                return f"datetime.fromisoformat('{self.value.isoformat()}') if random.random() < {missing_prob_str} else None"
             elif isinstance(self.value, date):
                 return f"date.fromisoformat('{self.value.isoformat()}') if random.random() < {missing_prob_str} else None"
             else:
                 raise ValueError(f"Invalid value type: {type(self.value)}")
     
     @classmethod
-    def _type_check(cls, value: Union[float, int, str, bool, date, pd.Series]) -> bool:
-        return isinstance(value, (float, int, str, bool, date))
+    def _type_check(cls, value: Union[float, int, str, bool, date, datetime, pd.Series]) -> bool:
+        return isinstance(value, (float, int, str, bool, datetime, date))
     
-    def _contains_single_value(self, value: Union[float, int, str, bool, date]) -> bool:
+    def _contains_single_value(self, value: Union[float, int, str, bool, date, datetime]) -> bool:
         return value == self.value
 
 
@@ -393,6 +401,14 @@ def _rand_date(d0: date, d1: date) -> date:
     return d0 + timedelta(days=random.randint(0, delta))
 
 
+def _rand_datetime(dt0: datetime, dt1: datetime) -> datetime:
+    """Generate a random datetime between dt0 and dt1 (inclusive)."""
+    delta = dt1 - dt0
+    total_seconds = int(delta.total_seconds())
+    random_seconds = random.randint(0, total_seconds)
+    return dt0 + timedelta(seconds=random_seconds)
+
+
 @dataclass(frozen=True)
 class DateProfile(ColumnProfile):
     min: date
@@ -526,6 +542,147 @@ class DateStrProfile(ColumnProfile):
         return self.min_datetime.date() <= value_date <= self.max_datetime.date()
 
 
+@dataclass(frozen=True)
+class DatetimeProfile(ColumnProfile):
+    min: datetime
+    max: datetime
+    type: Literal['datetime'] = 'datetime'
+
+    def __post_init__(self):
+        # accept ISO strings, convert to datetime
+        if isinstance(self.min, str):
+            object.__setattr__(self, 'min', datetime.fromisoformat(self.min))  # type: ignore[arg-type]
+        if isinstance(self.max, str):
+            object.__setattr__(self, 'max', datetime.fromisoformat(self.max))  # type: ignore[arg-type]
+
+    def __str__(self) -> str:
+        if pd.isna(self.min) or pd.isna(self.max):
+            return (f"DatetimeProfile(min=None, max=None, "
+                    f"missing_prob={self.missing_prob})")
+        return (f"DatetimeProfile(min='{self.min.isoformat()}', "
+                f"max='{self.max.isoformat()}', missing_prob={self.missing_prob})")
+
+    def sample(self) -> Optional[datetime]:
+        if self._maybe_missing():
+            return None
+        if pd.isna(self.min) or pd.isna(self.max):
+            return None
+        return _rand_datetime(self.min, self.max)
+
+    def sample_script(self, ignore_missing: bool = False) -> str:
+        min_iso = self.min.isoformat()
+        max_iso = self.max.isoformat()
+        base_script = f"datetime.fromisoformat('{min_iso}') + timedelta(seconds=random.randint(0, int((datetime.fromisoformat('{max_iso}') - datetime.fromisoformat('{min_iso}')).total_seconds())))"
+        if not self.has_nulls() or ignore_missing:
+            return base_script
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"{base_script} if random.random() < {prob_str} else None"
+
+    @classmethod
+    def _type_check(cls, value: Union[datetime, pd.Series]) -> bool:
+        # check if value is a datetime or a pd.Series of datetimes
+        if isinstance(value, datetime):
+            return True
+        if isinstance(value, pd.Series):
+            if is_datetime64_any_dtype(value):
+                return True
+            if value.dtype == 'object':
+                # Check if all non-null values are datetime objects
+                non_null_values = value.dropna()
+                return not non_null_values.empty and all(isinstance(val, datetime) for val in non_null_values)
+        return False
+
+    def _contains_single_value(self, value: datetime) -> bool:
+        if not isinstance(value, (datetime, pd.Timestamp)):
+            return False
+        return self.min <= value <= self.max
+
+
+@dataclass(frozen=True)
+class DatetimeStrProfile(ColumnProfile):
+    min: str  # ISO-8601 with time
+    max: str
+    type: Literal['datetime_str'] = 'datetime_str'
+
+    @property
+    def min_datetime(self) -> datetime:
+        return datetime.fromisoformat(self.min)
+    
+    @property
+    def max_datetime(self) -> datetime:
+        return datetime.fromisoformat(self.max)
+
+    def __post_init__(self):
+        # allow datetime objects on construction
+        if isinstance(self.min, datetime):
+            object.__setattr__(self, 'min', self.min.isoformat())  # type: ignore[arg-type]
+        if isinstance(self.max, datetime):
+            object.__setattr__(self, 'max', self.max.isoformat())  # type: ignore[arg-type]
+
+    def __str__(self) -> str:
+        if self.min is None or self.max is None or pd.isna(self.min) or pd.isna(self.max):
+            return (f"DatetimeStrProfile(min=None, max=None, "
+                    f"missing_prob={self.missing_prob})")
+        return (f"DatetimeStrProfile(min='{self.min}', max='{self.max}', "
+                f"missing_prob={self.missing_prob})")
+
+    def sample(self) -> Optional[str]:
+        if self._maybe_missing() or not self.min or not self.max:
+            return None
+        dt0 = datetime.fromisoformat(self.min)
+        dt1 = datetime.fromisoformat(self.max)
+        sampled_datetime = _rand_datetime(dt0, dt1)
+        return sampled_datetime.isoformat()
+
+    def sample_script(self, ignore_missing: bool = False) -> str:
+        base_script = f"(datetime.fromisoformat('{self.min}') + timedelta(seconds=random.randint(0, int((datetime.fromisoformat('{self.max}') - datetime.fromisoformat('{self.min}')).total_seconds())))).isoformat()"
+        if not self.has_nulls() or ignore_missing:
+            return base_script
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"{base_script} if random.random() < {prob_str} else None"
+
+    @classmethod
+    def _type_check(cls, value: Union[str, pd.Series]) -> bool:
+        # check if value is a string or a pd.Series of strings that can be parsed as datetimes with time
+        if isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value)
+                # Check if it has time components (not just date)
+                return dt.time() != datetime.min.time() or 'T' in value or ' ' in value
+            except ValueError:
+                return False
+        if isinstance(value, pd.Series) and value.dtype == 'object':
+            # Check if all non-null values are strings that can be parsed as datetimes with time
+            non_null_values = value.dropna()
+            if non_null_values.empty:
+                return False
+            # First check if any values are already datetime objects - if so, this is NOT a DatetimeStrProfile
+            if any(isinstance(val, (datetime, date)) for val in non_null_values):
+                return False
+            # Check if all non-null values are strings
+            if not all(isinstance(val, str) for val in non_null_values):
+                return False
+            # Then check if all values are strings that can be parsed as datetimes with time components
+            try:
+                for val in non_null_values:
+                    dt = datetime.fromisoformat(val)
+                    # Must have time components or explicit time markers
+                    if dt.time() == datetime.min.time() and 'T' not in val and ' ' not in val:
+                        return False
+                return True
+            except (ValueError, TypeError):
+                return False
+        return False
+
+    def _contains_single_value(self, value: str) -> bool:
+        if not isinstance(value, (str, np.str_)):
+            return False
+        value_datetime = datetime.fromisoformat(value)
+        return self.min_datetime <= value_datetime <= self.max_datetime
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # string / categorical
 # ────────────────────────────────────────────────────────────────────────────
@@ -583,14 +740,14 @@ def profile_column(
     q_low: float = 0.10,
     q_high: float = 0.90,
 ) -> Union[
-    FloatProfile, IntProfile, DateStrProfile,
+    FloatProfile, IntProfile, DateStrProfile, DatetimeProfile, DatetimeStrProfile,
     StringProfile, DateProfile, BoolProfile,
     NullProfile, OneValueProfile,
 ]:
     """
     Build a ColumnProfile for *df[column]*:
       • trims numeric outliers to [q_low , q_high] quantiles
-      • recognises bool / int / float / datetime / date-string / generic string
+      • recognises bool / int / float / datetime / datetime-string / date / date-string / generic string
     """
     s = df[column]
     missing_prob = float(round(s.isna().mean(), 2))
@@ -635,6 +792,20 @@ def profile_column(
             return IntProfile(missing_prob=missing_prob, min=int(clean.min()), max=int(clean.max()))    # type: ignore[arg-type]
         return FloatProfile(missing_prob=missing_prob, min=float(lo), max=float(hi))  # type: ignore[arg-type]
 
+    # datetime ---------------------------------------------------------------
+    if DatetimeProfile.type_check(s):
+        clean = s.dropna()
+        if clean.empty:
+            return DatetimeProfile(missing_prob=missing_prob, min=pd.NaT, max=pd.NaT)  # type: ignore[arg-type]
+        min_datetime = clean.min()
+        max_datetime = clean.max()
+        # Convert pandas Timestamp to datetime if needed
+        if hasattr(min_datetime, 'to_pydatetime'):
+            min_datetime = min_datetime.to_pydatetime()
+        if hasattr(max_datetime, 'to_pydatetime'):
+            max_datetime = max_datetime.to_pydatetime()
+        return DatetimeProfile(missing_prob=missing_prob, min=min_datetime, max=max_datetime)  # type: ignore[arg-type]
+
     # date -------------------------------------------------------------------
     if DateProfile.type_check(s):
         clean = s.dropna()
@@ -648,6 +819,21 @@ def profile_column(
         if hasattr(max_date, 'date'):
             max_date = max_date.date()
         return DateProfile(missing_prob=missing_prob, min=min_date, max=max_date)     # type: ignore[arg-type]
+
+    # datetime_str -----------------------------------------------------------
+    if DatetimeStrProfile.type_check(s):
+        # Try to parse as datetimes with time components
+        try:
+            parsed = pd.to_datetime(s.dropna(), errors="coerce")
+            if parsed.notna().any():
+                min_datetime = parsed.min().isoformat()
+                max_datetime = parsed.max().isoformat()
+                return DatetimeStrProfile(missing_prob=missing_prob, min=min_datetime, max=max_datetime)  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            pass
+        # otherwise treat as categorical
+        values = sorted(s.dropna().unique().tolist())
+        return StringProfile(missing_prob=missing_prob, values=values)                   # type: ignore[arg-type]
 
     # date_str ---------------------------------------------------------------
     if DateStrProfile.type_check(s):

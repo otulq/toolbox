@@ -1,10 +1,11 @@
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
 from importune import importunity
 with importunity():
     from ..profile_df import (
         FloatProfile, IntProfile, BoolProfile, DateProfile, DateStrProfile,
-        StringProfile, NullProfile, OneValueProfile, profile_column, DataFrameProfile
+        DatetimeProfile, DatetimeStrProfile, StringProfile, NullProfile, OneValueProfile, 
+        profile_column, DataFrameProfile
     )
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -124,6 +125,93 @@ def test_OneValueProfile_sample_script_date():
     prof = OneValueProfile(missing_prob=0.0, value=test_date)
     script = prof.sample_script()
     assert "date.fromisoformat('2023-09-02')" in script
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# DatetimeProfile
+# ────────────────────────────────────────────────────────────────────────────
+def test_DatetimeProfile_sample():
+    dt0 = datetime(2020, 1, 1, 10, 30, 0)
+    dt1 = datetime(2020, 12, 31, 15, 45, 30)
+    prof = DatetimeProfile(missing_prob=0.0, min=dt0, max=dt1)
+    vals = _non_none(prof.samples(50))
+    assert all(dt0 <= v <= dt1 for v in vals)
+    assert all(isinstance(v, datetime) for v in vals)
+
+
+def test_DatetimeProfile_sample_script():
+    dt0 = datetime(2023, 9, 2, 8, 3, 0)
+    dt1 = datetime(2023, 9, 2, 10, 2, 32)
+    prof = DatetimeProfile(missing_prob=0.0, min=dt0, max=dt1)
+    script = prof.sample_script()
+    assert "datetime.fromisoformat" in script
+    assert "2023-09-02T08:03:00" in script
+    assert "2023-09-02T10:02:32" in script
+
+
+def test_DatetimeProfile_type_check():
+    # Test individual datetime objects
+    assert DatetimeProfile.type_check(datetime.now())
+    assert not DatetimeProfile.type_check(date.today())
+    assert not DatetimeProfile.type_check("2023-01-01")
+    
+    # Test pandas datetime64 series
+    df_dt64 = pd.DataFrame({"x": pd.to_datetime(["2023-01-01 10:30:00", "2023-01-02 15:45:30"])})
+    assert DatetimeProfile.type_check(df_dt64["x"])
+    
+    # Test object series with datetime objects
+    df_obj = pd.DataFrame({"x": [datetime(2023, 1, 1, 10, 30), datetime(2023, 1, 2, 15, 45)]})
+    assert DatetimeProfile.type_check(df_obj["x"])
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# DatetimeStrProfile
+# ────────────────────────────────────────────────────────────────────────────
+def test_DatetimeStrProfile_sample():
+    dt_min = "2020-01-01T10:30:00"
+    dt_max = "2020-12-31T15:45:30"
+    prof = DatetimeStrProfile(missing_prob=0.0, min=dt_min, max=dt_max)
+    vals = _non_none(prof.samples(50))
+    assert all(isinstance(v, str) for v in vals)
+    # Check that all samples can be parsed as datetimes
+    parsed_vals = [datetime.fromisoformat(v) for v in vals]
+    dt0 = datetime.fromisoformat(dt_min)
+    dt1 = datetime.fromisoformat(dt_max)
+    assert all(dt0 <= pv <= dt1 for pv in parsed_vals)
+
+
+def test_DatetimeStrProfile_sample_script():
+    dt_min = "2023-09-02T08:03:00"
+    dt_max = "2023-09-02T10:02:32"
+    prof = DatetimeStrProfile(missing_prob=0.0, min=dt_min, max=dt_max)
+    script = prof.sample_script()
+    assert "datetime.fromisoformat" in script
+    assert "2023-09-02T08:03:00" in script
+    assert "2023-09-02T10:02:32" in script
+    assert ".isoformat()" in script
+
+
+def test_DatetimeStrProfile_type_check():
+    # Test datetime strings with time components
+    assert DatetimeStrProfile.type_check("2023-01-01T10:30:00")
+    assert DatetimeStrProfile.type_check("2023-01-01 10:30:00")
+    assert not DatetimeStrProfile.type_check("2023-01-01")  # Date only, no time
+    assert not DatetimeStrProfile.type_check(datetime.now())  # Actual datetime object
+    
+    # Test pandas series of datetime strings
+    df_dt_str = pd.DataFrame({"x": ["2023-01-01T10:30:00", "2023-01-02T15:45:30"]})
+    assert DatetimeStrProfile.type_check(df_dt_str["x"])
+    
+    # Test that date-only strings don't match
+    df_date_str = pd.DataFrame({"x": ["2023-01-01", "2023-01-02"]})
+    assert not DatetimeStrProfile.type_check(df_date_str["x"])
+
+
+def test_OneValueProfile_sample_script_datetime():
+    test_datetime = datetime(2023, 9, 2, 8, 3, 0)
+    prof = OneValueProfile(missing_prob=0.0, value=test_datetime)
+    script = prof.sample_script()
+    assert "datetime.fromisoformat('2023-09-02T08:03:00')" in script
 
 def test_OneValueProfile_contains():
     prof = OneValueProfile(missing_prob=0.2, value=42)
@@ -272,6 +360,55 @@ def test_profile_one_value_int():
     assert isinstance(prof, OneValueProfile)
     assert prof.value == 1
     assert prof.missing_prob == 0.25
+
+# ────────────────────────────────────────────────────────────────────────────
+# profile_column – datetime inference
+# ────────────────────────────────────────────────────────────────────────────
+def test_profile_column_datetime():
+    # Test pandas datetime64 column
+    df = pd.DataFrame({"dt": pd.to_datetime(["2023-01-01 10:30:00", "2023-01-02 15:45:30", None])})
+    prof = profile_column(df, column="dt")
+    assert isinstance(prof, DatetimeProfile)
+    assert prof.missing_prob == 0.33
+
+
+def test_profile_column_datetime_objects():
+    # Test column with Python datetime objects
+    dt1 = datetime(2023, 1, 1, 10, 30, 0)
+    dt2 = datetime(2023, 1, 2, 15, 45, 30)
+    df = pd.DataFrame({"dt": [dt1, dt2, dt1]})
+    prof = profile_column(df, column="dt")
+    assert isinstance(prof, DatetimeProfile)
+    assert prof.missing_prob == 0.0
+    assert prof.min == dt1
+    assert prof.max == dt2
+
+
+def test_profile_column_datetime_str():
+    # Test datetime strings with time components
+    df = pd.DataFrame({"dt_str": ["2023-01-01T10:30:00", "2023-01-02T15:45:30", None]})
+    prof = profile_column(df, column="dt_str")
+    assert isinstance(prof, DatetimeStrProfile)
+    assert prof.min == "2023-01-01T10:30:00"
+    assert prof.max == "2023-01-02T15:45:30"
+    assert prof.missing_prob == 0.33
+
+
+def test_profile_column_datetime_str_space_format():
+    # Test datetime strings with space separator
+    df = pd.DataFrame({"dt_str": ["2023-01-01 10:30:00", "2023-01-02 15:45:30"]})
+    prof = profile_column(df, column="dt_str")
+    assert isinstance(prof, DatetimeStrProfile)
+
+
+def test_profile_column_single_value_datetime():
+    test_datetime = datetime(2023, 9, 2, 8, 3, 0)
+    df = pd.DataFrame({"x": [test_datetime, test_datetime, test_datetime]})
+    prof = profile_column(df, column="x")
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value == test_datetime
+    assert prof.missing_prob == 0.0
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # profile_column – date-string inference
