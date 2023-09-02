@@ -1,7 +1,7 @@
 """
 profile_df.py   column-profiling utilities
 
-• ColumnProfile hierarchy (FloatProfile, IntProfile, BoolProfile,
+• ColumnProfile hierarchy (FloatProfile, IntProfile, FloatStrProfile, IntStrProfile, BoolProfile,
   DateProfile, DateStrProfile, DatetimeProfile, DatetimeStrProfile, StringProfile)
 • profile_column()    build a profile from an existing DataFrame column
 • DataFrameProfile    convenience wrapper to profile an entire DataFrame
@@ -342,6 +342,143 @@ class IntProfile(ColumnProfile):
         if not isinstance(value, (int, np.int64)):
             return False
         return self.min <= value <= self.max
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# numeric string profiles
+# ────────────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class FloatStrProfile(ColumnProfile):
+    min: float
+    max: float
+    type: Literal['float_str'] = 'float_str'
+
+    def __str__(self) -> str:
+        return (f"FloatStrProfile(min={self.min}, max={self.max}, "
+                f"missing_prob={self.missing_prob})")
+
+    def sample(self) -> Optional[str]:
+        if self._maybe_missing() or self.min is None or self.max is None:
+            return None
+        if pd.isna(self.min) or pd.isna(self.max):
+            return None
+        numeric_value = random.uniform(self.min, self.max)
+        return str(numeric_value)
+
+    def sample_script(self, ignore_missing: bool = False) -> str:
+        min_str = _format_float_for_script(self.min, self.max)
+        max_str = _format_float_for_script(self.max, self.min)
+        
+        if not self.has_nulls() or ignore_missing:
+            return f"str(random.uniform({min_str}, {max_str}))"
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"str(random.uniform({min_str}, {max_str})) if random.random() < {prob_str} else None"
+
+    @classmethod
+    def _type_check(cls, value: Union[str, pd.Series]) -> bool:
+        # check if value is a string that can be converted to float, or a pd.Series of such strings
+        if isinstance(value, str):
+            try:
+                # Must be convertible to float AND have decimal indicators
+                if '.' not in value and 'e' not in value.lower():
+                    return False  # This is an integer string
+                float(value)
+                return True
+            except (ValueError, TypeError):
+                return False
+        if isinstance(value, pd.Series) and value.dtype == 'object':
+            # Check if all non-null values are strings that can be converted to floats
+            non_null_values = value.dropna()
+            if non_null_values.empty:
+                return False
+            # Must be strings
+            if not all(isinstance(val, str) for val in non_null_values):
+                return False
+            # Must be convertible to float and have float indicators
+            try:
+                for val in non_null_values:
+                    # Check if it's actually a float (has decimal places or scientific notation)
+                    if '.' not in val and 'e' not in val.lower():
+                        return False  # This is actually an int string, not float string
+                    float(val)  # Will raise exception if not convertible
+                return True
+            except (ValueError, TypeError):
+                return False
+        return False
+
+    def _contains_single_value(self, value: str) -> bool:
+        if not isinstance(value, str):
+            return False
+        try:
+            numeric_value = float(value)
+            return self.min <= numeric_value <= self.max
+        except (ValueError, TypeError):
+            return False
+
+
+@dataclass(frozen=True)
+class IntStrProfile(ColumnProfile):
+    min: int
+    max: int
+    type: Literal['int_str'] = 'int_str'
+
+    def __str__(self) -> str:
+        return (f"IntStrProfile(min={self.min}, max={self.max}, "
+                f"missing_prob={self.missing_prob})")
+
+    def sample(self) -> Optional[str]:
+        if self._maybe_missing() or self.min is None or self.max is None:
+            return None
+        if pd.isna(self.min) or pd.isna(self.max):
+            return None
+        numeric_value = random.randint(self.min, self.max)
+        return str(numeric_value)
+
+    def sample_script(self, ignore_missing: bool = False) -> str:
+        if not self.has_nulls() or ignore_missing:
+            return f"str(random.randint({self.min}, {self.max}))"
+        
+        prob_str = _format_float_for_script(1 - self.missing_prob)
+        return f"str(random.randint({self.min}, {self.max})) if random.random() < {prob_str} else None"
+
+    @classmethod
+    def _type_check(cls, value: Union[str, pd.Series]) -> bool:
+        # check if value is a string that can be converted to int, or a pd.Series of such strings
+        if isinstance(value, str):
+            try:
+                int(value)
+                return True
+            except (ValueError, TypeError):
+                return False
+        if isinstance(value, pd.Series) and value.dtype == 'object':
+            # Check if all non-null values are strings that can be converted to integers
+            non_null_values = value.dropna()
+            if non_null_values.empty:
+                return False
+            # Must be strings
+            if not all(isinstance(val, str) for val in non_null_values):
+                return False
+            # Must be convertible to int (no decimal points)
+            try:
+                for val in non_null_values:
+                    # Check for decimal points or scientific notation
+                    if '.' in val or 'e' in val.lower():
+                        return False
+                    int(val)  # Will raise exception if not convertible
+                return True
+            except (ValueError, TypeError):
+                return False
+        return False
+
+    def _contains_single_value(self, value: str) -> bool:
+        if not isinstance(value, str):
+            return False
+        try:
+            numeric_value = int(value)
+            return self.min <= numeric_value <= self.max
+        except (ValueError, TypeError):
+            return False
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -740,14 +877,14 @@ def profile_column(
     q_low: float = 0.10,
     q_high: float = 0.90,
 ) -> Union[
-    FloatProfile, IntProfile, DateStrProfile, DatetimeProfile, DatetimeStrProfile,
+    FloatProfile, IntProfile, FloatStrProfile, IntStrProfile, DateStrProfile, DatetimeProfile, DatetimeStrProfile,
     StringProfile, DateProfile, BoolProfile,
     NullProfile, OneValueProfile,
 ]:
     """
     Build a ColumnProfile for *df[column]*:
       • trims numeric outliers to [q_low , q_high] quantiles
-      • recognises bool / int / float / datetime / datetime-string / date / date-string / generic string
+      • recognises bool / int / float / int-string / float-string / datetime / datetime-string / date / date-string / generic string
     """
     s = df[column]
     missing_prob = float(round(s.isna().mean(), 2))
@@ -819,6 +956,24 @@ def profile_column(
         if hasattr(max_date, 'date'):
             max_date = max_date.date()
         return DateProfile(missing_prob=missing_prob, min=min_date, max=max_date)     # type: ignore[arg-type]
+
+    # numeric strings --------------------------------------------------------
+    # Check for string columns that contain numeric values BEFORE other string checks
+    if IntStrProfile.type_check(s):
+        clean = s.dropna()
+        if clean.empty:
+            return IntStrProfile(missing_prob=missing_prob, min=0, max=0)               # type: ignore[arg-type]
+        # Convert to numeric to find min/max
+        numeric_values = [int(val) for val in clean]
+        return IntStrProfile(missing_prob=missing_prob, min=min(numeric_values), max=max(numeric_values))  # type: ignore[arg-type]
+    
+    if FloatStrProfile.type_check(s):
+        clean = s.dropna()
+        if clean.empty:
+            return FloatStrProfile(missing_prob=missing_prob, min=0.0, max=0.0)         # type: ignore[arg-type]
+        # Convert to numeric to find min/max
+        numeric_values = [float(val) for val in clean]
+        return FloatStrProfile(missing_prob=missing_prob, min=min(numeric_values), max=max(numeric_values))  # type: ignore[arg-type]
 
     # datetime_str -----------------------------------------------------------
     if DatetimeStrProfile.type_check(s):
