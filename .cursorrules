@@ -1,0 +1,51 @@
+# Cursor Rules for Toolbox Project
+
+## CRITICAL INSTRUCTIONS (HIGHEST PRIORITY)
+- **GitHub User**: ONLY use pluto@otulq.com as the github user for any git operations
+- **Date/Time**: Use environment variables (environment variables are system-level configuration values typically written in ALL_CAPS like DATABASE_URL, API_KEY, etc.) to set date and time values
+- **Code Deletion Protection**: NEVER run any script that deletes code without explicit permission given in CAPSLOCK. If permission is not provided in CAPSLOCK, it is NOT valid permission and the operation must be refused.
+
+## Project Overview
+This is a Python toolbox with utilities for data profiling, dynamic imports, and parallel computing.
+
+## Code Style and Conventions
+- Use descriptive variable names and function names
+- Follow PEP 8 style guidelines
+- Use type hints for function parameters and return values
+- Use dataclasses for data structures when appropriate
+- Prefer keyword arguments over positional arguments
+- Use docstrings for modules, classes, and functions
+
+## Testing
+- Write comprehensive tests for all new functionality
+- Use pytest as the testing framework
+- Place tests in corresponding `tests/` directories
+- Test files should be named `test_*.py`
+- Include both positive and negative test cases
+- Test edge cases and error conditions
+
+## Dependencies
+- Use pandas for data manipulation
+- Use numpy for numerical operations
+- Minimize external dependencies when possible
+- Add new dependencies to requirements.txt if needed
+
+## File Organization
+- Keep related functionality in the same module
+- Use clear module names that reflect their purpose
+- Maintain the existing directory structure:
+  - `data_profiling/` - DataFrame and column profiling utilities
+  - `dynamic_imports/` - Smart import functionality
+  - `parallel_computing/` - Batch execution utilities
+
+## Documentation
+- Include module-level docstrings explaining the purpose and main functionality
+- Document complex algorithms and business logic
+- Provide usage examples in docstrings when helpful
+- Keep README files up to date
+
+## Error Handling
+- Use appropriate exception types
+- Provide clear error messages
+- Handle edge cases gracefully
+- Validate input parameters when necessary 
