@@ -3,7 +3,7 @@ profile_df.py   column-profiling utilities
 
 • ColumnProfile hierarchy (FloatProfile, IntProfile, FloatStrProfile, IntStrProfile, BoolProfile,
   DateProfile, DateStrProfile, DatetimeProfile, DatetimeStrProfile, StringProfile)
-• profile_column()    build a profile from an existing DataFrame column
+• profile_column()    build a profile from an existing DataFrame column (supports decimal.Decimal)
 • DataFrameProfile    convenience wrapper to profile an entire DataFrame
 """
 
@@ -14,6 +14,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, asdict
 from datetime import date, timedelta, datetime
+from decimal import Decimal
 from typing import Optional, Union, Dict, Literal, List, Any
 
 import numpy as np
@@ -36,6 +37,8 @@ def _convert_numpy_to_python(value: Any) -> Any:
         return value.to_pydatetime()
     elif isinstance(value, np.datetime64):
         return pd.Timestamp(value).to_pydatetime()
+    elif isinstance(value, Decimal):
+        return float(value)
     else:
         return value
 
@@ -290,18 +293,27 @@ class FloatProfile(ColumnProfile):
         return self.min - margin
 
     @classmethod
-    def _type_check(cls, value: Union[float, pd.Series]) -> bool:
-        # check if value is a float or a numpy float64 or a pd.Series of floats
-        if isinstance(value, (float, np.float64)):
+    def _type_check(cls, value: Union[float, Decimal, pd.Series]) -> bool:
+        # check if value is a float, Decimal, numpy float64, or pd.Series of floats/Decimals
+        if isinstance(value, (float, np.float64, Decimal)):
             return True
-        if isinstance(value, pd.Series) and value.dtype == 'float64':
-            return True
+        if isinstance(value, pd.Series):
+            if value.dtype == 'float64':
+                return True
+            if value.dtype == 'object':
+                # Check if all non-null values are Decimal objects
+                non_null_values = value.dropna()
+                if non_null_values.empty:
+                    return False
+                return all(isinstance(val, Decimal) for val in non_null_values)
         return False
 
-    def _contains_single_value(self, value: float) -> bool:
-        if not isinstance(value, (float, np.float64)):
+    def _contains_single_value(self, value: Union[float, Decimal]) -> bool:
+        if not isinstance(value, (float, np.float64, Decimal)):
             return False
-        return self.min <= value <= self.max
+        # Convert Decimal to float for comparison
+        numeric_value = float(value) if isinstance(value, Decimal) else value
+        return self.min <= numeric_value <= self.max
 
 
 @dataclass(frozen=True)
@@ -544,6 +556,15 @@ def _rand_datetime(dt0: datetime, dt1: datetime) -> datetime:
     total_seconds = int(delta.total_seconds())
     random_seconds = random.randint(0, total_seconds)
     return dt0 + timedelta(seconds=random_seconds)
+
+
+def _is_numeric_string(value: str) -> bool:
+    """Check if a string can be converted to either int or float."""
+    try:
+        float(value)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -917,16 +938,28 @@ def profile_column(
             if is_integer_dtype(s):
                 return IntProfile(missing_prob=missing_prob, min=np.nan, max=np.nan)  # type: ignore[arg-type]
             return FloatProfile(missing_prob=missing_prob, min=np.nan, max=np.nan)    # type: ignore[arg-type]
-        lo, hi = clean.quantile([q_low, q_high])
+        
+        # Convert Decimal values to float for quantile calculation
+        if clean.dtype == 'object' and all(isinstance(val, Decimal) for val in clean):
+            clean_numeric = clean.apply(float)
+        else:
+            clean_numeric = clean
+            
+        lo, hi = clean_numeric.quantile([q_low, q_high])
         
         # Check if quantiles created min=max (effectively single value)
         if lo == hi:
-            python_value = _convert_numpy_to_python(lo)
+            python_value = _convert_numpy_to_python(clean.iloc[0])
             return OneValueProfile(missing_prob=missing_prob, value=python_value)       # type: ignore[arg-type]
         
         # Only use IntProfile if the original dtype is actually integer
         if is_integer_dtype(s):
             return IntProfile(missing_prob=missing_prob, min=int(clean.min()), max=int(clean.max()))    # type: ignore[arg-type]
+        
+        # For Decimal columns, use the converted numeric values for min/max
+        if clean.dtype == 'object' and all(isinstance(val, Decimal) for val in clean):
+            return FloatProfile(missing_prob=missing_prob, min=float(lo), max=float(hi))  # type: ignore[arg-type]
+        
         return FloatProfile(missing_prob=missing_prob, min=float(lo), max=float(hi))  # type: ignore[arg-type]
 
     # datetime ---------------------------------------------------------------
@@ -957,8 +990,25 @@ def profile_column(
             max_date = max_date.date()
         return DateProfile(missing_prob=missing_prob, min=min_date, max=max_date)     # type: ignore[arg-type]
 
+    # mixed numeric strings --------------------------------------------------
+    # Check for mixed int/float strings and treat all as FloatStrProfile
+    if s.dtype == 'object':
+        clean = s.dropna()
+        if not clean.empty and all(isinstance(val, str) for val in clean):
+            # Check if ALL values are numeric strings
+            if all(_is_numeric_string(val) for val in clean):
+                # Check if we have a MIX of int and float strings
+                has_int_strings = any('.' not in val and 'e' not in val.lower() for val in clean)
+                has_float_strings = any('.' in val or 'e' in val.lower() for val in clean)
+                
+                # Only treat as mixed if we actually have BOTH types
+                if has_int_strings and has_float_strings:
+                    # Convert all to float to get min/max range
+                    numeric_values = [float(val) for val in clean]
+                    return FloatStrProfile(missing_prob=missing_prob, min=min(numeric_values), max=max(numeric_values))  # type: ignore[arg-type]
+
     # numeric strings --------------------------------------------------------
-    # Check for string columns that contain numeric values BEFORE other string checks
+    # Check for string columns that contain pure numeric values (all same type)
     if IntStrProfile.type_check(s):
         clean = s.dropna()
         if clean.empty:
