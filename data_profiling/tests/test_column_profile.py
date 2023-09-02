@@ -703,3 +703,131 @@ def test_DataFrameProfile_generate_df_and_check_values_are_in_range():
     assert not DateStrProfile.type_check(synth['date_col_with_nulls'])
     assert not DateStrProfile.type_check(synth['bool_col'])
     assert not DateStrProfile.type_check(synth['bool_col_with_nulls'])
+
+# ────────────────────────────────────────────────────────────────────────────
+# Decimal support tests
+# ────────────────────────────────────────────────────────────────────────────
+def test_profile_column_decimal_basic():
+    """Test that decimal.Decimal values are profiled as FloatProfile."""
+    from decimal import Decimal
+    
+    df = pd.DataFrame({
+        "decimal_col": [Decimal('10.50'), Decimal('20.75'), Decimal('15.25')]
+    })
+    prof = profile_column(df, column="decimal_col")
+    
+    assert isinstance(prof, FloatProfile)
+    assert prof.missing_prob == 0.0
+    # Should use quantile-based range, not exact min/max
+    assert prof.min < 20.75
+    assert prof.max > 10.50
+
+
+def test_profile_column_decimal_with_nulls():
+    """Test decimal.Decimal values with missing data."""
+    from decimal import Decimal
+    
+    df = pd.DataFrame({
+        "decimal_col": [Decimal('10.50'), None, Decimal('20.75'), Decimal('15.25')]
+    })
+    prof = profile_column(df, column="decimal_col")
+    
+    assert isinstance(prof, FloatProfile)
+    assert prof.missing_prob == 0.25
+    assert prof.min < 20.75
+    assert prof.max > 10.50
+
+
+def test_profile_column_decimal_single_value():
+    """Test single decimal.Decimal value becomes OneValueProfile."""
+    from decimal import Decimal
+    
+    df = pd.DataFrame({
+        "decimal_col": [Decimal('42.50'), Decimal('42.50'), Decimal('42.50')]
+    })
+    prof = profile_column(df, column="decimal_col")
+    
+    assert isinstance(prof, OneValueProfile)
+    assert prof.value == 42.5  # Converted to float
+    assert prof.missing_prob == 0.0
+
+
+def test_profile_column_decimal_mixed_precision():
+    """Test decimal.Decimal values with different precision levels."""
+    from decimal import Decimal
+    
+    df = pd.DataFrame({
+        "decimal_col": [Decimal('10.5'), Decimal('20.75'), Decimal('15.250'), Decimal('30')]
+    })
+    prof = profile_column(df, column="decimal_col")
+    
+    assert isinstance(prof, FloatProfile)
+    assert prof.missing_prob == 0.0
+
+
+def test_FloatProfile_type_check_decimal():
+    """Test FloatProfile.type_check recognizes decimal.Decimal values."""
+    from decimal import Decimal
+    
+    # Single Decimal value
+    assert FloatProfile.type_check(Decimal('42.5'))
+    
+    # Series of Decimal values
+    df = pd.DataFrame({"col": [Decimal('10.5'), Decimal('20.75')]})
+    assert FloatProfile.type_check(df["col"])
+    
+    # Mixed Decimal and None
+    df_nulls = pd.DataFrame({"col": [Decimal('10.5'), None, Decimal('20.75')]})
+    assert FloatProfile.type_check(df_nulls["col"])
+
+
+def test_FloatProfile_contains_decimal():
+    """Test FloatProfile contains method works with decimal.Decimal values."""
+    from decimal import Decimal
+    
+    prof = FloatProfile(missing_prob=0.0, min=10.0, max=20.0)
+    
+    # Decimal values within range
+    assert Decimal('15.5') in prof
+    assert Decimal('10.0') in prof
+    assert Decimal('20.0') in prof
+    
+    # Decimal values outside range
+    assert Decimal('5.0') not in prof
+    assert Decimal('25.0') not in prof
+    
+    # Mixed types within range
+    assert 15.5 in prof  # float
+    assert Decimal('15.5') in prof  # Decimal
+
+
+def test_convert_numpy_to_python_decimal():
+    """Test _convert_numpy_to_python handles decimal.Decimal values."""
+    from decimal import Decimal
+    from data_profiling.profile_df import _convert_numpy_to_python
+    
+    decimal_val = Decimal('42.75')
+    result = _convert_numpy_to_python(decimal_val)
+    
+    assert isinstance(result, float)
+    assert result == 42.75
+
+
+def test_FloatProfile_script_generation_decimal():
+    """Test script generation works correctly for Decimal-derived FloatProfile."""
+    from decimal import Decimal
+    
+    df = pd.DataFrame({
+        "decimal_col": [Decimal('10.50'), Decimal('20.75'), Decimal('15.25')]
+    })
+    prof = profile_column(df, column="decimal_col")
+    
+    assert isinstance(prof, FloatProfile)
+    script = prof.sample_script()
+    assert "random.uniform" in script
+    assert "random.choice" not in script
+    
+    # Test samples_script
+    samples_script = prof.samples_script(10)
+    assert "random.uniform" in samples_script
+    assert "for _ in range(10)" in samples_script
