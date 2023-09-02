@@ -208,6 +208,34 @@ def test_profile_column_quantile_edge_case():
     assert script == "0.0"
     assert "random.uniform" not in script
 
+def test_profile_column_numpy_types():
+    """Test that numpy types are converted to native Python types in OneValueProfile."""
+    import numpy as np
+    
+    # Test numpy int64
+    df_int = pd.DataFrame({"x": [np.int64(42), np.int64(42), np.int64(42)]})
+    prof_int = profile_column(df_int, column="x")
+    assert isinstance(prof_int, OneValueProfile)
+    assert type(prof_int.value) is int  # Native Python int, not numpy.int64
+    assert prof_int.value == 42
+    assert prof_int.sample_script() == "42"  # Should not error
+    
+    # Test numpy float64
+    df_float = pd.DataFrame({"x": [np.float64(3.14), np.float64(3.14), np.float64(3.14)]})
+    prof_float = profile_column(df_float, column="x")
+    assert isinstance(prof_float, OneValueProfile)
+    assert type(prof_float.value) is float  # Native Python float, not numpy.float64
+    assert prof_float.value == 3.14
+    assert prof_float.sample_script() == "3.14"  # Should not error
+    
+    # Test numpy bool_
+    df_bool = pd.DataFrame({"x": [np.bool_(True), np.bool_(True), np.bool_(True)]})
+    prof_bool = profile_column(df_bool, column="x")
+    assert isinstance(prof_bool, OneValueProfile)
+    assert type(prof_bool.value) is bool  # Native Python bool, not numpy.bool_
+    assert prof_bool.value is True
+    assert prof_bool.sample_script() == "True"  # Should not error
+
 def test_profile_one_value_int():
     df = pd.DataFrame({"x": [1, 1, 1, None]})
     prof = profile_column(df, column="x")
