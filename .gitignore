@@ -69,3 +69,6 @@ ipython_config.py
 *.sublime-workspace
 
 #######################
+
+# Editor tooling that records sessions.
+.specstory/
